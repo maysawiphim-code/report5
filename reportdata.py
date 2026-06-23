@@ -6,6 +6,7 @@ import matplotlib.pyplot as plt
 import matplotlib.font_manager as fm
 import io, tempfile, os, re, math
 import numpy as np
+import urllib.request
 from openpyxl import Workbook, load_workbook
 from openpyxl.styles import Font, PatternFill, Alignment, Border, Side
 from openpyxl.drawing.image import Image as XLImage
@@ -14,16 +15,18 @@ from openpyxl.formatting.rule import DataBarRule
 st.set_page_config(layout="wide")
 st.title("📊 ระบบสร้างรายงานสรุปผลอัตโนมัติ")
 
+# ── ดาวน์โหลด Sarabun font ถ้ายังไม่มี (รองรับ Streamlit Cloud) ──
+_FONT_PATH = "/tmp/Sarabun-Regular.ttf"
+if not os.path.exists(_FONT_PATH):
+    urllib.request.urlretrieve(
+        "https://github.com/google/fonts/raw/main/ofl/sarabun/Sarabun-Regular.ttf",
+        _FONT_PATH
+    )
+    fm.fontManager.addfont(_FONT_PATH)
+
 def get_thai_font():
-    for name in fm.findSystemFonts():
-        try:
-            prop = fm.FontProperties(fname=name)
-            fn = prop.get_name()
-            if any(k in fn for k in ['Thai','Sarabun','Noto','TH','Garuda','Loma']):
-                return prop
-        except Exception:
-            pass
-    return None
+    return fm.FontProperties(fname=_FONT_PATH)
+
 thai_font = get_thai_font()
 
 def fmt_pct(v):
@@ -100,7 +103,7 @@ def parse_summary2(df):
     }
 
 # ============================================================
-# parse_hourly — shift totals ตรงกับ df2 โดย skip แถวว่าง/หัวผลัด
+# parse_hourly
 # ============================================================
 def parse_hourly(df):
     r = df.values
@@ -130,7 +133,6 @@ def parse_hourly(df):
             return 0.0 if (isinstance(v,float) and np.isnan(v)) or v is None else float(v)
         except: return 0.0
 
-    # อ่านเฉพาะแถวที่มี time range จริง (ข้าม header ผลัด/แถวว่าง)
     hourly = []
     for i in range(hourly_start, len(r)):
         row = r[i]
@@ -143,8 +145,6 @@ def parse_hourly(df):
 
     df_out = pd.DataFrame(hourly)
 
-    # แบ่งผลัดด้วย index จริงของ DataFrame (เรียงตามเวลา)
-    # ผลัดเช้า = 8 แถวแรก, บ่าย = 8 แถวถัดไป, ดึก = ที่เหลือ
     n = len(df_out)
     shift_size = 8
 
@@ -193,6 +193,9 @@ def peak_time_str(groups, times):
 # ============================================================
 # make_graph
 # ============================================================
+def _fmt_val(v):
+    return f"{math.ceil(v):,}"
+
 def make_graph(df_h, col, color, title, peak_groups, shift_totals, unit='คน'):
     plt.close('all')
     fig, ax = plt.subplots(figsize=(20, 8), dpi=150)
@@ -204,21 +207,18 @@ def make_graph(df_h, col, color, title, peak_groups, shift_totals, unit='คน'
 
     ax.plot(x, vals, marker='o', markersize=10, color=color, linewidth=2.5, zorder=3)
 
-    # ตัวเลขบนจุด — แสดงทศนิยม .5 ถ้ามี, ไม่แสดง .0
     for i, val in enumerate(vals):
         label = f"{math.ceil(val):,}"
-        kw = {'ha':'center','fontsize':13,'fontweight':'bold','zorder':4}
-        if thai_font: kw['fontproperties'] = thai_font
+        kw = {'ha':'center','fontsize':13,'fontweight':'bold','zorder':4,
+              'fontproperties': thai_font}
         ax.text(i, val + mx*0.055, label, **kw)
 
-    # เส้นแบ่งผลัด
     n = len(df_h)
     shift_size = 8
     for sp in [shift_size-0.5, shift_size*2-0.5]:
         if sp < n:
             ax.axvline(x=sp, color='#555555', linestyle='--', alpha=0.7, linewidth=1.8)
 
-    # ป้ายผลัด + ยอดรวม
     shift_info = [
         (shift_size/2-0.5,   f"ผลัดเช้า\n{_fmt_val(st_data['เช้า'])} {unit}"),
         (shift_size*1.5-0.5, f"ผลัดบ่าย\n{_fmt_val(st_data['บ่าย'])} {unit}"),
@@ -226,11 +226,10 @@ def make_graph(df_h, col, color, title, peak_groups, shift_totals, unit='คน'
     ]
     for xp, label in shift_info:
         if xp < n:
-            kw_sh = {'ha':'center','va':'bottom','fontsize':13,'fontweight':'bold','color':'#222222'}
-            if thai_font: kw_sh['fontproperties'] = thai_font
-            ax.text(xp, mx*1.33, label, **kw_sh)
+            ax.text(xp, mx*1.33, label,
+                    ha='center', va='bottom', fontsize=13, fontweight='bold',
+                    color='#222222', fontproperties=thai_font)
 
-    # กรอบเส้นปะช่วง peak
     y_bot = -mx*0.08; y_top = mx*1.23
     for s, e in peak_groups:
         ax.add_patch(plt.Rectangle(
@@ -240,13 +239,11 @@ def make_graph(df_h, col, color, title, peak_groups, shift_totals, unit='คน'
         ))
 
     ax.set_xticks(x)
-    tkw = {'rotation':90, 'fontsize':11}
-    if thai_font: tkw['fontproperties'] = thai_font
-    ax.set_xticklabels(df_h['เวลา'].tolist(), **tkw)
+    ax.set_xticklabels(df_h['เวลา'].tolist(),
+                       rotation=90, fontsize=11, fontproperties=thai_font)
 
-    tkw2 = {'fontsize':18, 'pad':14, 'fontweight':'bold'}
-    if thai_font: tkw2['fontproperties'] = thai_font
-    ax.set_title(title, **tkw2)
+    ax.set_title(title, fontsize=18, pad=14, fontweight='bold',
+                 fontproperties=thai_font)
 
     ax.set_ylim(y_bot, mx*1.62)
     ax.set_xlim(-0.7, n-0.3)
@@ -256,24 +253,18 @@ def make_graph(df_h, col, color, title, peak_groups, shift_totals, unit='คน'
     ax.set_facecolor('#FAFBFC')
     fig.patch.set_facecolor('#FFFFFF')
 
-    # ยอดรวมด้านขวา
     total_label = f"รวมทั้งหมด\n{_fmt_val(total_val)} {unit}"
-    kw_tot = {'transform':ax.transAxes,'fontsize':13,'va':'center','ha':'left',
-              'fontweight':'bold','color':color,
-              'bbox':dict(boxstyle='round,pad=0.5',facecolor='white',edgecolor=color,
-                          linewidth=1.5,alpha=0.95)}
-    if thai_font: kw_tot['fontproperties'] = thai_font
-    ax.text(1.01, 0.5, total_label, **kw_tot)
+    ax.text(1.01, 0.5, total_label,
+            transform=ax.transAxes, fontsize=13, va='center', ha='left',
+            fontweight='bold', color=color, fontproperties=thai_font,
+            bbox=dict(boxstyle='round,pad=0.5', facecolor='white',
+                      edgecolor=color, linewidth=1.5, alpha=0.95))
 
     plt.tight_layout(pad=1.5)
     return fig
 
-def _fmt_val(v):
-    """แสดงจำนวนเป็นจำนวนเต็มเสมอ (ปัดขึ้น)"""
-    return f"{math.ceil(v):,}"
-
 # ============================================================
-# build_excel — กราฟคนต่อท้ายตารางคน, กราฟรถต่อท้ายตารางรถ
+# build_excel
 # ============================================================
 def build_excel(data, df_h, peak_pg, peak_cg, site_name, date_str,
                 fig_p, fig_c, dir_figs, car_figs,
@@ -317,11 +308,11 @@ def build_excel(data, df_h, peak_pg, peak_cg, site_name, date_str,
                     try:
                         pv = float(val)
                         is_red = pv > 0.20
-                        val = fmt_pct(pv)      # แสดงเป็น %
+                        val = fmt_pct(pv)
                     except: pass
                 elif col not in ['หัวข้อ','%สัดส่วน'] and val != '':
                     try:
-                        val = math.ceil(float(val))   # จำนวนเต็ม
+                        val = math.ceil(float(val))
                     except: pass
                 aln   = left if col == 'หัวข้อ' else center
                 cfont = Font(size=10, name='Arial',
@@ -395,7 +386,7 @@ def build_excel(data, df_h, peak_pg, peak_cg, site_name, date_str,
         df_age], ignore_index=True)
     row = write_table(row, sa) + 2
 
-    # ── กราฟคน (ต่อท้ายตารางคน) ──
+    # ── กราฟคน ──
     ws.merge_cells(f'B{row}:L{row}')
     sc(row,2,'กราฟคนเดินผ่านรายชั่วโมง',font=hdr,fill=fill_hdr,align=center); row+=1
     row = add_graph(fig_p, row)
@@ -420,7 +411,7 @@ def build_excel(data, df_h, peak_pg, peak_cg, site_name, date_str,
     ws.merge_cells(f'B{row}:L{row}')
     sc(row,2,f'3. ช่วงเวลาที่รถผ่านหนาแน่น: {peak_c_str} น.',font=reg,align=left); row+=2
 
-    # ── กราฟรถรวม + ทิศทาง + ประเภท (ต่อท้ายตารางรถ) ──
+    # ── กราฟรถ ──
     ws.merge_cells(f'B{row}:L{row}')
     sc(row,2,'กราฟรถวิ่งผ่านรายชั่วโมง',font=hdr,fill=fill_hdr,align=center); row+=1
     row = add_graph(fig_c, row)
@@ -439,56 +430,46 @@ def build_excel(data, df_h, peak_pg, peak_cg, site_name, date_str,
         (src_summary2_bytes, 'ข้อมูลสรุป2'),
         (src_hourly_bytes,   'ข้อมูลรายชั่วโมง'),
     ]:
-        if not src_bytes: 
+        if not src_bytes:
             continue
         try:
             src_wb = load_workbook(io.BytesIO(src_bytes))
             src_ws = src_wb.active
             new_ws = wb.create_sheet(title=sheet_name)
-            
-            # หาคอลัมน์ %สัดส่วน
+
             pct_column = None
-            for row in src_ws.iter_rows(min_row=1, max_row=10, values_only=True):
-                for idx, cell in enumerate(row, 1):
+            for row_s in src_ws.iter_rows(min_row=1, max_row=10, values_only=True):
+                for idx, cell in enumerate(row_s, 1):
                     if cell and isinstance(cell, str) and 'สัดส่วน' in str(cell):
                         pct_column = idx
                         break
                 if pct_column: break
-            
+
             for ri, src_row in enumerate(src_ws.iter_rows(values_only=True), start=1):
                 for ci, val in enumerate(src_row, start=1):
                     c = new_ws.cell(row=ri, column=ci)
-                    
                     if isinstance(val, float):
                         if np.isnan(val):
                             c.value = 0
                             c.number_format = '#,##0'
                             continue
                         if sheet_name == 'ข้อมูลรายชั่วโมง':
-                            # 1. แถว 1-35 → เปอร์เซ็นต์
                             if ri <= 35 and 0 < val < 1.0:
                                 c.value = round(val * 100, 4)
                                 c.number_format = '0.00"%";-0.00"%";0.00"%";@'
                             elif ri == 71 or (ri > 71 and 0 < val < 1.0):
-                                # แถว 71+: คงทศนิยมเดิม
                                 c.value = val
                                 c.number_format = '0.0000'
                             else:
-                                # แถวข้อมูลรายชั่วโมง: จำนวนเต็ม ปัดขึ้น
                                 c.value = math.ceil(val) if val % 1 >= 0.5 else int(val)
                                 c.number_format = '#,##0'
- 
-                        # ==================== Sheet สรุป2 ====================
-                        # ==================== Sheet สรุป2 ====================
                         else:
-                            # ปัดทศนิยมขึ้นสำหรับคอลัมน์ผลัด (เช้า, บ่าย, ดึก, รวม)
-                            if ci in [3, 4, 5, 6]:   # คอลัมน์ผลัดเช้า, บ่าย, ดึก, รวม
-                                if val % 1 == 0.5 or val % 1 >= 0.5:
+                            if ci in [3, 4, 5, 6]:
+                                if val % 1 >= 0.5:
                                     c.value = math.ceil(val)
                                 else:
                                     c.value = int(val)
                                 c.number_format = '#,##0'
-                            # เปอร์เซ็นต์
                             elif (pct_column and ci == pct_column) or (0 < val < 1.0 and ci >= 6):
                                 c.value = round(val * 100, 4)
                                 c.number_format = '0.00"%";-0.00"%";0.00"%";@'
@@ -497,7 +478,6 @@ def build_excel(data, df_h, peak_pg, peak_cg, site_name, date_str,
                                 c.number_format = '#,##0'
                     else:
                         c.value = val if val is not None else ''
-                        
         except Exception as e:
             st.warning(f"คัดลอก sheet {sheet_name} ไม่สมบูรณ์: {e}")
 
@@ -563,8 +543,6 @@ if file2 and file_hour and st.button("🔍 วิเคราะห์และ�
             cols = st.columns(min(2, len(dir_figs)))
             for i, (name, fig) in enumerate(dir_figs.items()):
                 with cols[i % len(cols)]: st.pyplot(fig)
-
-        
 
         file2.seek(0);     src2_bytes = file2.read()
         file_hour.seek(0); srch_bytes = file_hour.read()
