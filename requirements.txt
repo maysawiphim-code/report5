@@ -1,9 +1,3 @@
 streamlit
-pillow
-pytesseract
-pandas
-opencv-python-headless
-numpy
 openpyxl
-requests
-
+pandas
